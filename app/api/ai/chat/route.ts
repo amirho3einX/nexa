@@ -15,14 +15,29 @@ type SearchFilters = {
   stockFilter: "in_stock" | "out_of_stock" | null;
 };
 
+type ProductResult = {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  price: string;
+  stock: number;
+  imageUrl: string | null;
+  category: string;
+  distance?: number;
+};
+
 function extractFilters(query: string): SearchFilters {
   const text = query.toLowerCase();
 
   let minPrice: number | null = null;
   let maxPrice: number | null = null;
 
+  // between $20 and $35
+  // from $20 to $35
+  // $20 - $35
   const betweenMatch = text.match(
-    /(?:between|from)\s*\$?(\d+(?:\.\d+)?)\s*(?:and|to|-)\s*\$?(\d+(?:\.\d+)?)/
+    /(?:between|from)\s*\$?\s*(\d+(?:\.\d+)?)\s*(?:and|to|-)\s*\$?\s*(\d+(?:\.\d+)?)/i
   );
 
   if (betweenMatch) {
@@ -33,9 +48,14 @@ function extractFilters(query: string): SearchFilters {
     maxPrice = Math.max(first, second);
   }
 
+  // under $30
+  // below $30
+  // less than $30
+  // up to $30
+  // maximum price of $30
   if (maxPrice === null) {
     const maxMatch = text.match(
-      /(?:under|below|less than|up to|max(?:imum)?(?: price)?(?: of)?)\s*\$?(\d+(?:\.\d+)?)/
+      /(?:under|below|less than|up to|max(?:imum)?(?:\s+price)?(?:\s+of)?)\s*\$?\s*(\d+(?:\.\d+)?)/i
     );
 
     if (maxMatch) {
@@ -43,9 +63,14 @@ function extractFilters(query: string): SearchFilters {
     }
   }
 
+  // over $20
+  // above $20
+  // more than $20
+  // at least $20
+  // starting from $20
   if (minPrice === null) {
     const minMatch = text.match(
-      /(?:over|above|more than|at least|starting from)\s*\$?(\d+(?:\.\d+)?)/
+      /(?:over|above|more than|at least|starting from)\s*\$?\s*(\d+(?:\.\d+)?)/i
     );
 
     if (minMatch) {
@@ -56,7 +81,7 @@ function extractFilters(query: string): SearchFilters {
   let stockFilter: SearchFilters["stockFilter"] = null;
 
   if (
-    /\b(in stock|available|currently available|have it in stock)\b/.test(
+    /\b(in stock|available|currently available|have it in stock)\b/i.test(
       text
     )
   ) {
@@ -64,7 +89,7 @@ function extractFilters(query: string): SearchFilters {
   }
 
   if (
-    /\b(out of stock|unavailable|not available|sold out)\b/.test(text)
+    /\b(out of stock|unavailable|not available|sold out)\b/i.test(text)
   ) {
     stockFilter = "out_of_stock";
   }
@@ -74,6 +99,78 @@ function extractFilters(query: string): SearchFilters {
     maxPrice,
     stockFilter,
   };
+}
+
+function normalizeSearchText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractSearchTerms(query: string): string[] {
+  const normalized = normalizeSearchText(query);
+
+  const stopWords = new Set([
+    "what",
+    "whats",
+    "what's",
+    "is",
+    "the",
+    "price",
+    "of",
+    "for",
+    "how",
+    "much",
+    "does",
+    "do",
+    "you",
+    "have",
+    "any",
+    "a",
+    "an",
+    "i",
+    "need",
+    "want",
+    "looking",
+    "look",
+    "something",
+    "with",
+    "that",
+    "can",
+    "show",
+    "me",
+    "find",
+    "please",
+    "product",
+    "products",
+    "in",
+    "stock",
+    "available",
+    "currently",
+    "under",
+    "below",
+    "less",
+    "than",
+    "up",
+    "to",
+    "over",
+    "above",
+    "more",
+    "at",
+    "least",
+    "starting",
+    "from",
+    "between",
+    "and",
+    "or",
+  ]);
+
+  return normalized
+    .split(/\s+/)
+    .filter((word) => word.length >= 2)
+    .filter((word) => !stopWords.has(word));
 }
 
 export async function POST(request: Request) {
@@ -129,27 +226,7 @@ export async function POST(request: Request) {
     console.log("Nexa AI filters:", filters);
 
     // -----------------------------------------
-    // 2. Generate query embedding
-    // -----------------------------------------
-
-    const embeddingResponse = await ai.models.embedContent({
-      model: "gemini-embedding-001",
-      contents: lastUserMessage,
-      config: {
-        outputDimensionality: 768,
-      },
-    });
-
-    const embedding = embeddingResponse.embeddings?.[0]?.values;
-
-    if (!embedding || embedding.length !== 768) {
-      throw new Error("Failed to generate query embedding");
-    }
-
-    const vector = `[${embedding.join(",")}]`;
-
-    // -----------------------------------------
-    // 3. Build SQL filters
+    // 2. Build SQL filters
     // -----------------------------------------
 
     const conditions: Prisma.Sql[] = [
@@ -186,22 +263,31 @@ export async function POST(request: Request) {
     );
 
     // -----------------------------------------
-    // 4. Semantic search + exact filters
+    // 3. Generate query embedding
     // -----------------------------------------
 
-    const products = await prisma.$queryRaw<
-      {
-        id: number;
-        name: string;
-        slug: string;
-        description: string | null;
-        price: string;
-        stock: number;
-        imageUrl: string | null;
-        category: string;
-        distance: number;
-      }[]
-    >`
+    const embeddingResponse = await ai.models.embedContent({
+      model: "gemini-embedding-001",
+      contents: lastUserMessage,
+      config: {
+        outputDimensionality: 768,
+      },
+    });
+
+    const embedding =
+      embeddingResponse.embeddings?.[0]?.values;
+
+    if (!embedding || embedding.length !== 768) {
+      throw new Error("Failed to generate query embedding");
+    }
+
+    const vector = `[${embedding.join(",")}]`;
+
+    // -----------------------------------------
+    // 4. Semantic search
+    // -----------------------------------------
+
+    let products = await prisma.$queryRaw<ProductResult[]>`
       SELECT
         p.id,
         p.name,
@@ -223,7 +309,7 @@ export async function POST(request: Request) {
     `;
 
     console.log(
-      "Nexa AI products:",
+      "Nexa AI semantic products:",
       products.map((product) => ({
         name: product.name,
         price: product.price,
@@ -233,7 +319,131 @@ export async function POST(request: Request) {
     );
 
     // -----------------------------------------
-    // 5. Prepare product context for Gemini
+    // 5. Exact / keyword fallback
+    // -----------------------------------------
+
+    // If semantic search returns nothing,
+    // search directly by product name, slug,
+    // description and category.
+
+    if (products.length === 0) {
+      const searchTerms = extractSearchTerms(lastUserMessage);
+
+      console.log(
+        "Nexa AI fallback search terms:",
+        searchTerms
+      );
+
+      if (searchTerms.length > 0) {
+        const keywordConditions: Prisma.Sql[] = [];
+
+        for (const term of searchTerms) {
+          const pattern = `%${term}%`;
+
+          keywordConditions.push(
+            Prisma.sql`(
+              LOWER(p.name) LIKE LOWER(${pattern})
+              OR LOWER(p.slug) LIKE LOWER(${pattern})
+              OR LOWER(COALESCE(p.description, '')) LIKE LOWER(${pattern})
+              OR LOWER(c.name) LIKE LOWER(${pattern})
+            )`
+          );
+        }
+
+        const keywordWhere = Prisma.join(
+          keywordConditions,
+          " OR "
+        );
+
+        products = await prisma.$queryRaw<ProductResult[]>`
+          SELECT
+            p.id,
+            p.name,
+            p.slug,
+            p.description,
+            p.price::text AS price,
+            p.stock,
+            p."imageUrl" AS "imageUrl",
+            c.name AS category
+          FROM "Product" p
+          INNER JOIN "Category" c
+            ON c.id = p."categoryId"
+          WHERE
+            ${whereClause}
+            AND (${keywordWhere})
+          ORDER BY
+            p.name ASC
+          LIMIT 5
+        `;
+
+        console.log(
+          "Nexa AI fallback products:",
+          products.map((product) => ({
+            name: product.name,
+            price: product.price,
+            stock: product.stock,
+          }))
+        );
+      }
+    }
+
+    // -----------------------------------------
+    // 6. Strong exact product-name fallback
+    // -----------------------------------------
+
+    // Example:
+    // "What is the price of the Leather Wallet?"
+
+    // This specifically handles an exact product name
+    // even if semantic search produces a poor similarity score.
+
+    if (products.length === 0) {
+      const normalizedQuery =
+        normalizeSearchText(lastUserMessage);
+
+      const exactProducts =
+        await prisma.$queryRaw<ProductResult[]>`
+          SELECT
+            p.id,
+            p.name,
+            p.slug,
+            p.description,
+            p.price::text AS price,
+            p.stock,
+            p."imageUrl" AS "imageUrl",
+            c.name AS category
+          FROM "Product" p
+          INNER JOIN "Category" c
+            ON c.id = p."categoryId"
+          WHERE
+            ${whereClause}
+            AND (
+              LOWER(${normalizedQuery}) LIKE
+                '%' || LOWER(p.name) || '%'
+              OR LOWER(p.name) LIKE
+                '%' || LOWER(${normalizedQuery}) || '%'
+              OR LOWER(${normalizedQuery}) LIKE
+                '%' || LOWER(REPLACE(p.name, ' ', '-')) || '%'
+            )
+          LIMIT 5
+        `;
+
+      if (exactProducts.length > 0) {
+        products = exactProducts;
+      }
+    }
+
+    console.log(
+      "Nexa AI final products:",
+      products.map((product) => ({
+        name: product.name,
+        price: product.price,
+        stock: product.stock,
+      }))
+    );
+
+    // -----------------------------------------
+    // 7. Prepare product context
     // -----------------------------------------
 
     const productContext =
@@ -254,11 +464,14 @@ Description: ${
         : "No relevant products were found.";
 
     // -----------------------------------------
-    // 6. Send conversation + products to Gemini
+    // 8. Send conversation + products to Gemini
     // -----------------------------------------
 
     const contents = messages.map((message) => ({
-      role: message.role === "assistant" ? "model" : "user",
+      role:
+        message.role === "assistant"
+          ? "model"
+          : "user",
       parts: [
         {
           text: message.content,
@@ -268,9 +481,7 @@ Description: ${
 
     const response = await ai.models.generateContent({
       model: "gemini-3.6-flash",
-
       contents,
-
       config: {
         systemInstruction: `
 You are Nexa AI, the official shopping assistant for the Nexa ecommerce store.
@@ -286,7 +497,7 @@ STYLE:
 - Do not write long paragraphs.
 - Do not over-explain.
 - Do not repeat the customer's question.
-- Give the useful information immediately.
+- Give useful information immediately.
 - Use simple sentences.
 
 PRODUCT INFORMATION:
@@ -311,6 +522,7 @@ PRODUCT RECOMMENDATIONS:
 For multiple products, use:
 
 Product Name — $Price
+
 Short reason why it matches.
 
 PRICE QUESTIONS:
@@ -342,9 +554,7 @@ RELEVANT NEXA PRODUCTS:
 
 ${productContext}
         `,
-
         temperature: 0.2,
-
         maxOutputTokens: 220,
       },
     });
@@ -352,16 +562,17 @@ ${productContext}
     const content = response.text?.trim();
 
     if (!content) {
-      throw new Error("Gemini returned an empty response");
+      throw new Error(
+        "Gemini returned an empty response"
+      );
     }
 
     // -----------------------------------------
-    // 7. Return AI response + products
+    // 9. Return response + products
     // -----------------------------------------
 
     return NextResponse.json({
       message: content,
-
       products: products.slice(0, 3).map((product) => ({
         id: product.id,
         name: product.name,
@@ -387,4 +598,3 @@ ${productContext}
     );
   }
 }
-
